@@ -9,9 +9,8 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import requests
 
-from config import TELEGRAM_TOKEN, OPENROUTER_API_KEY, STABILITY_API_KEY, DEFAULT_TEMPERATURE
+from config import TELEGRAM_TOKEN
 from wallet.eth import create_wallet, get_wallet, send_eth
 import qrcode
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -19,28 +18,9 @@ from finance_ai.data_fetch import update_prices, update_news
 from db.models import SessionLocal, Price, News, Forecast
 from finance_ai.analysis import analyze_unlabeled_news, build_forecast
 
-# Проверяем наличие обязательных токенов
-if not all([TELEGRAM_TOKEN, OPENROUTER_API_KEY, STABILITY_API_KEY]):
-    missing = [
-        name
-        for name, value in (
-            ("TELEGRAM_TOKEN", TELEGRAM_TOKEN),
-            ("OPENROUTER_API_KEY", OPENROUTER_API_KEY),
-            ("STABILITY_API_KEY", STABILITY_API_KEY),
-        )
-        if not value
-    ]
-    raise RuntimeError(
-        f"Отсутствуют обязательные переменные окружения: {', '.join(missing)}. "
-        "Заполните их в .env файле."
-    )
-
-# Модели LLM, доступные через OpenRouter
-MODELS = {
-    "DeepSeek Prover": "deepseek/deepseek-prover-v2:free",
-    "Llama 4 Scout": "meta-llama/llama-4-scout:free",
-    "GPT-4 Turbo": "openai/gpt-4-turbo-preview",
-}
+# Проверяем наличие обязательного токена
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("Переменная TELEGRAM_TOKEN не указана в .env")
 
 # Настройка логирования
 logging.basicConfig(
@@ -53,8 +33,9 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура главного меню."""
     return ReplyKeyboardMarkup(
         [
-            ["🧹 Очистить чат", "🔄 Сменить модель"],
-            ["🎨 Генерация изображения", "ℹ️ Помощь"],
+            ["👛 Wallet", "📈 Rates"],
+            ["📰 News", "🔮 Forecast"],
+            ["ℹ️ Help"],
         ],
         resize_keyboard=True,
     )
@@ -73,12 +54,9 @@ def get_model_keyboard() -> ReplyKeyboardMarkup:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start – приветствие и выбор модели."""
 
-    context.user_data.setdefault("chat_history", [])
-    context.user_data.setdefault("settings", {"temperature": DEFAULT_TEMPERATURE})
-
     await update.message.reply_text(
-        "🤖 Привет! Я AI-бот с поддержкой генерации изображений.\nВыберите модель:",
-        reply_markup=get_model_keyboard(),
+        "🤖 Привет! Я финансовый бот. Доступные функции:",
+        reply_markup=get_main_keyboard(),
     )
 
 
@@ -88,102 +66,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text.strip()
 
     # --- Команды клавиатуры --- #
-    if user_message == "🧹 Очистить чат":
-        context.user_data["chat_history"] = []
-        await update.message.reply_text("История очищена.", reply_markup=get_main_keyboard())
-        return
-    elif user_message == "🔄 Сменить модель":
-        await update.message.reply_text("Выберите модель:", reply_markup=get_model_keyboard())
-        return
-    elif user_message == "ℹ️ Помощь":
+    if user_message == "ℹ️ Help":
         await update.message.reply_text(
             "Доступные команды:\n"
-            "/start – перезапуск\n"
-            "/img – генерация изображения\n"
-            "🧹 – очистить историю",
+            "/createwallet <pwd> – создать кошелёк\n"
+            "/wallet – баланс\n"
+            "/deposit – депозитный QR\n"
+            "/withdraw <amt> <to> <pwd> – вывод ETH\n"
+            "/history – последние транзакции\n"
+            "/rates – цены BTC/ETH\n"
+            "/news – свежие новости\n"
+            "/forecast – прогноз цен",
             reply_markup=get_main_keyboard(),
         )
         return
-    elif user_message == "🎨 Генерация изображения":
-        await update.message.reply_text("Напишите /img описание картинки")
+    elif user_message == "👛 Wallet":
+        await wallet_cmd(update, context)
+        return
+    elif user_message == "📈 Rates":
+        await rates_cmd(update, context)
+        return
+    elif user_message == "📰 News":
+        await news_cmd(update, context)
+        return
+    elif user_message == "🔮 Forecast":
+        await forecast_cmd(update, context)
         return
 
-    # Если модель ещё не выбрана
-    if "selected_model" not in context.user_data:
-        await update.message.reply_text("Сначала выберите модель!", reply_markup=get_model_keyboard())
+    # Неизвестное сообщение – игнор
         return
-
-    # --- Запрос к LLM --- #
-    context.user_data["chat_history"].append({"role": "user", "content": user_message})
-
-    try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": MODELS[context.user_data["selected_model"]],
-                "messages": context.user_data["chat_history"],
-                "temperature": context.user_data["settings"]["temperature"],
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        ai_response = response.json()["choices"][0]["message"]["content"]
-        await update.message.reply_text(ai_response)
-
-    except Exception as exc:
-        logger.exception("Ошибка при обращении к LLM: %s", exc)
-        await update.message.reply_text("⚠️ Ошибка обработки запроса")
-
-
-async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /img – генерация изображения через Stability AI."""
-
-    prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text("Укажите описание: /img закат на море")
-        return
-
-    await update.message.reply_text("🖌️ Генерирую изображение…")
-
-    try:
-        response = requests.post(
-            "https://api.stability.ai/v2beta/stable-image/generate/sd3",
-            headers={
-                "Authorization": f"Bearer {STABILITY_API_KEY}",
-                "Accept": "image/*",
-            },
-            files={"none": ""},
-            data={"prompt": prompt, "output_format": "jpeg"},
-            timeout=60,
-        )
-        response.raise_for_status()
-
-        await update.message.reply_photo(photo=BytesIO(response.content), caption=f"🖼️ {prompt}")
-
-    except Exception as exc:
-        logger.exception("Ошибка генерации изображения: %s", exc)
-        await update.message.reply_text("⚠️ Не удалось создать изображение")
-
-
-async def handle_model_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик выбора модели из клавиатуры."""
-
-    selected_model = update.message.text.strip()
-
-    if selected_model == "⬅️ Назад":
-        await update.message.reply_text("Главное меню:", reply_markup=get_main_keyboard())
-        return
-
-    if selected_model not in MODELS:
-        await update.message.reply_text("Выберите модель из списка:", reply_markup=get_model_keyboard())
-        return
-
-    context.user_data["selected_model"] = selected_model
-    await update.message.reply_text(f"✅ Выбрана модель: {selected_model}", reply_markup=get_main_keyboard())
 
 
 async def create_wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -335,7 +246,6 @@ def run_bot() -> None:
 
     # Command handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("img", generate_image))
     app.add_handler(CommandHandler("createwallet", create_wallet_cmd))
     app.add_handler(CommandHandler("wallet", wallet_cmd))
     app.add_handler(CommandHandler("deposit", deposit_cmd))
@@ -345,14 +255,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("news", news_cmd))
     app.add_handler(CommandHandler("forecast", forecast_cmd))
 
-    # Model selection keyboard
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.Regex(f"^({'|'.join(MODELS.keys())}|⬅️ Назад)$"),
-            handle_model_selection,
-        )
-    )
-
+    # Reply-keyboard buttons handler
     # Any other text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
