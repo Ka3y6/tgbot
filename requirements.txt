@@ -1,6 +1,7 @@
+1:1
++--extra-index-url https://download.pytorch.org/whl/cpu
 python-telegram-bot
 requests>=2.31.0
-telegram
 python-dotenv>=1.0.0
 web3>=6.0
 eth-account>=0.10.0
@@ -11,6 +12,6 @@ Pillow>=10.0
 feedparser>=6.0
 APScheduler>=3.10
 transformers>=4.41.0
-torch>=2.3
+torch==2.2.2+cpu
 prophet>=1.1
 pandas>=2.2
