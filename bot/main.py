@@ -14,7 +14,7 @@ import requests
 from config import TELEGRAM_TOKEN, OPENROUTER_API_KEY, STABILITY_API_KEY, DEFAULT_TEMPERATURE
 from wallet.eth import create_wallet, get_wallet, send_eth
 import qrcode
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from finance_ai.data_fetch import update_prices, update_news
 from db.models import SessionLocal, Price, News, Forecast
 from finance_ai.analysis import analyze_unlabeled_news, build_forecast
@@ -357,7 +357,7 @@ def run_bot() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Scheduler for data fetch
-    scheduler = AsyncIOScheduler()
+    scheduler = BackgroundScheduler()
 
     def prices_job():
         with SessionLocal() as session:
