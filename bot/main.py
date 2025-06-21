@@ -1,5 +1,9 @@
 import logging
 from io import BytesIO
+import asyncio
+import requests
+from bs4 import BeautifulSoup
+from deep_translator import GoogleTranslator
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -62,6 +66,38 @@ def get_wallet_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
     )
+
+
+# ---------- Helper: parse & translate news ---------- #
+
+async def _fetch_and_translate(url: str, max_chars: int = 400) -> tuple[str, str]:
+    """Скачивает статью, извлекает текст и переводит на русский.
+
+    Возвращает (title_ru, snippet_ru). При ошибке – пустые строки."""
+
+    def _worker() -> tuple[str, str]:
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            title_en = soup.title.string.strip() if soup.title and soup.title.string else ""
+
+            paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+            body_en = " ".join(paragraphs)[:max_chars]
+
+            translator = GoogleTranslator(source="auto", target="ru")
+
+            title_ru = translator.translate(title_en) if title_en else ""
+            snippet_ru = translator.translate(body_en) if body_en else ""
+
+            return title_ru, snippet_ru
+        except Exception as exc:
+            logger.exception("Ошибка парсинга/перевода новости %s: %s", url, exc)
+            return "", ""
+
+    return await asyncio.to_thread(_worker)
 
 
 # ---------- Handlers ---------- #
@@ -245,17 +281,29 @@ async def rates_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/news – выводит 3 последних новости."""
+    """/news – показывает 3 свежие новости (кратко, на русском, без ссылок)."""
+
     with SessionLocal() as session:
         items = (
             session.query(News).order_by(News.published_at.desc()).limit(3).all()
         )
+
     if not items:
         await update.message.reply_text("Новости ещё не загружены. Попробуйте позже.")
         return
 
-    text = "\n\n".join([f"{n.title}\n{n.url}" for n in items])
-    await update.message.reply_text(text)
+    messages: list[str] = []
+    # Обрабатываем статьи последовательно (можно добавить gather для параллели)
+    for n in items:
+        title_ru, snippet_ru = await _fetch_and_translate(n.url)
+        if not title_ru:
+            title_ru = n.title  # fallback на оригинал
+        msg_parts = [title_ru]
+        if snippet_ru:
+            msg_parts.append(snippet_ru)
+        messages.append("\n\n".join(msg_parts))
+
+    await update.message.reply_text("\n\n― ― ―\n\n".join(messages))
 
 
 async def forecast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

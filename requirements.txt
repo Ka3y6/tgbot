@@ -14,3 +14,5 @@ transformers>=4.41.0
 torch==2.7.1+cpu
 prophet>=1.1
 pandas>=2.2
+beautifulsoup4>=4.12
+deep-translator>=1.9
