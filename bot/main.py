@@ -304,9 +304,14 @@ async def rates_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/news – показывает 3 свежие новости (кратко, на русском, без ссылок)."""
 
+    MAX_FETCH = 10  # сколько записей забираем из БД чтобы набрать 3 уникальных
+
     with SessionLocal() as session:
         items = (
-            session.query(News).order_by(News.published_at.desc()).limit(3).all()
+            session.query(News)
+            .order_by(News.published_at.desc())
+            .limit(MAX_FETCH)
+            .all()
         )
 
     if not items:
@@ -314,15 +319,25 @@ async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     messages: list[str] = []
-    # Обрабатываем статьи последовательно (можно добавить gather для параллели)
+    seen_titles: set[str] = set()
+
     for n in items:
+        if n.title in seen_titles:
+            continue
+
         title_ru, snippet_ru = await _fetch_and_translate(n.url, n.summary)
         if not title_ru:
-            title_ru = n.title  # fallback на оригинал
+            title_ru = n.title  # fallback
+
         msg_parts = [title_ru]
         if snippet_ru:
             msg_parts.append(snippet_ru)
+
         messages.append("\n\n".join(msg_parts))
+        seen_titles.add(n.title)
+
+        if len(messages) == 3:
+            break
 
     await update.message.reply_text("\n\n― ― ―\n\n".join(messages))
 
