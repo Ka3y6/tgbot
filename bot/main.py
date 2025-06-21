@@ -49,6 +49,21 @@ def get_model_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+# ---------- Новый блок: клавиатура кошелька ---------- #
+
+
+def get_wallet_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура управления кошельком."""
+    return ReplyKeyboardMarkup(
+        [
+            ["💰 Balance", "➕ Deposit"],
+            ["💸 Withdraw", "📜 History"],
+            ["⬅️ Назад"],
+        ],
+        resize_keyboard=True,
+    )
+
+
 # ---------- Handlers ---------- #
 
 
@@ -93,9 +108,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_message == "🔮 Forecast":
         await forecast_cmd(update, context)
         return
+    # --- Клавиатура кошелька --- #
+    elif user_message == "💰 Balance":
+        await wallet_cmd(update, context)
+        return
+    elif user_message == "➕ Deposit":
+        await deposit_cmd(update, context)
+        return
+    elif user_message == "💸 Withdraw":
+        # Для вывода требуется сумма, адрес и пароль – подскажем пользователю формат
+        await update.message.reply_text(
+            "Введите команду:\n/withdraw <amount_eth> <to_address> <password>",
+            reply_markup=get_wallet_keyboard(),
+        )
+        return
+    elif user_message == "📜 History":
+        await history_cmd(update, context)
+        return
+    elif user_message == "⬅️ Назад":
+        await update.message.reply_text(
+            "Главное меню:", reply_markup=get_main_keyboard()
+        )
+        return
 
     # Неизвестное сообщение – игнор
-        return
+    return
 
 
 async def create_wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,10 +156,16 @@ async def wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/wallet – показать адрес и баланс."""
     info = get_wallet(update.effective_user.id)
     if not info:
-        await update.message.reply_text("Кошелёк не найден. Создайте его командой /createwallet <пароль>.")
+        await update.message.reply_text(
+            "Кошелёк не найден. Создайте его командой /createwallet <пароль>.",
+            reply_markup=get_main_keyboard(),
+        )
         return
 
-    await update.message.reply_text(f"Ваш адрес: {info.address}\nБаланс: {info.balance_eth:.6f} ETH")
+    await update.message.reply_text(
+        f"Ваш адрес: {info.address}\nБаланс: {info.balance_eth:.6f} ETH",
+        reply_markup=get_wallet_keyboard(),
+    )
 
 
 async def deposit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
