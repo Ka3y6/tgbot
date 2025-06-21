@@ -288,10 +288,18 @@ def run_bot() -> None:
                 build_forecast(session, coin)
         logger.debug("forecast_job завершена")
 
-    scheduler.add_job(prices_job, "interval", minutes=5)
-    scheduler.add_job(news_job, "interval", hours=1)
-    scheduler.add_job(sentiment_job, "interval", minutes=30)
-    scheduler.add_job(forecast_job, "cron", hour=0)
+    # Немедленный запуск при старте
+    prices_job()
+    news_job()
+    sentiment_job()
+    forecast_job()
+
+    # Укороченные интервалы для оперативного наполнения данных
+    scheduler.add_job(prices_job, "interval", minutes=2)
+    scheduler.add_job(news_job, "interval", minutes=10)
+    scheduler.add_job(sentiment_job, "interval", minutes=10)
+    scheduler.add_job(forecast_job, "cron", minute=0)  # каждый час в 00 минут
+
     scheduler.start()
 
     logger.info("Бот запущен и ожидает события…")
