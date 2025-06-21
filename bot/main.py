@@ -14,7 +14,7 @@ from config import TELEGRAM_TOKEN
 from wallet.eth import create_wallet, get_wallet, send_eth
 import qrcode
 from apscheduler.schedulers.background import BackgroundScheduler
-from finance_ai.data_fetch import update_prices, update_news
+from finance_ai.data_fetch import update_prices, update_news, backfill_prices
 from db.models import SessionLocal, Price, News, Forecast
 from finance_ai.analysis import analyze_unlabeled_news, build_forecast
 
@@ -288,7 +288,12 @@ def run_bot() -> None:
                 build_forecast(session, coin)
         logger.debug("forecast_job завершена")
 
-    # Немедленный запуск при старте
+    # --- подгружаем 90-дневную историю цен и немедленно выполняем задачи ---
+    with SessionLocal() as s:
+        for coin in ["bitcoin", "ethereum"]:
+            backfill_prices(s, coin)
+
+    # --- немедленный прогон при старте ---
     prices_job()
     news_job()
     sentiment_job()

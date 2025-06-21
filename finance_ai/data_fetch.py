@@ -19,6 +19,9 @@ TRACKED_COINS = ["bitcoin", "ethereum"]
 # RSS лента новостей (Cointelegraph)
 NEWS_FEED_URL = "https://cointelegraph.com/rss"
 
+# Endpoint для исторических данных (цены за N дней, шаг ~час)
+COINGECKO_CHART = "https://api.coingecko.com/api/v3/coins/{coin}/market_chart"
+
 
 def update_prices(session: SessionLocal, coins: List[str] | None = None) -> None:
     """Обновляем цены указанных монет и сохраняем в БД."""
@@ -70,4 +73,36 @@ def update_news(session: SessionLocal, feed_url: str = NEWS_FEED_URL) -> None:
             session.commit()
             logger.info("Добавлено %d новостных записей", new_count)
     except Exception as exc:
-        logger.exception("Ошибка обновления новостей: %s", exc) 
+        logger.exception("Ошибка обновления новостей: %s", exc)
+
+
+def backfill_prices(session: SessionLocal, coin: str, days: int = 90) -> None:
+    """Скачивает историю цен за *days* и добивает недостающие точки в таблицу."""
+
+    try:
+        resp = requests.get(
+            COINGECKO_CHART.format(coin=coin),
+            params={"vs_currency": "usd", "days": days},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        entries = resp.json().get("prices", [])  # [[ts_ms, price], ...]
+
+        added = 0
+        for ts_ms, price in entries:
+            ts = dt.datetime.utcfromtimestamp(ts_ms / 1000)
+            exists = (
+                session.query(Price)
+                .filter(Price.coin == coin, Price.timestamp == ts)
+                .first()
+            )
+            if exists:
+                continue
+            session.add(Price(coin=coin, price_usd=float(price), timestamp=ts))
+            added += 1
+
+        if added:
+            session.commit()
+        logger.info("Backfilled %d rows for %s", added, coin)
+    except Exception as exc:
+        logger.exception("Backfill error for %s: %s", coin, exc) 
