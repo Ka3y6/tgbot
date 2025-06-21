@@ -24,8 +24,9 @@ if not TELEGRAM_TOKEN:
 
 # Настройка логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG
 )
+logging.getLogger("apscheduler").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -263,21 +264,29 @@ def run_bot() -> None:
     scheduler = BackgroundScheduler()
 
     def prices_job():
+        logger.debug("Запуск задачи prices_job")
         with SessionLocal() as session:
             update_prices(session)
+        logger.debug("prices_job завершена")
 
     def news_job():
+        logger.debug("Запуск задачи news_job")
         with SessionLocal() as session:
             update_news(session)
+        logger.debug("news_job завершена")
 
     def sentiment_job():
+        logger.debug("Запуск задачи sentiment_job")
         with SessionLocal() as session:
             analyze_unlabeled_news(session)
+        logger.debug("sentiment_job завершена")
 
     def forecast_job():
+        logger.debug("Запуск задачи forecast_job")
         with SessionLocal() as session:
             for coin in ["bitcoin", "ethereum"]:
                 build_forecast(session, coin)
+        logger.debug("forecast_job завершена")
 
     scheduler.add_job(prices_job, "interval", minutes=5)
     scheduler.add_job(news_job, "interval", hours=1)
